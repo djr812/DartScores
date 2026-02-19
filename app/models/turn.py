@@ -23,6 +23,18 @@ class Turn(db.Model):
     player = db.relationship('Player', back_populates='turns')
     throws = db.relationship('Throw', back_populates='turn', cascade='all, delete-orphan')
     
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Ensure darts_thrown is initialized to 0 if not provided
+        if self.darts_thrown is None:
+            self.darts_thrown = 0
+        if self.score is None:
+            self.score = 0
+        if self.is_bust is None:
+            self.is_bust = False
+        if self.is_checkout is None:
+            self.is_checkout = False
+
     def __repr__(self):
         return f'<Turn {self.turn_number} by Player {self.player_id}>'
     
@@ -64,3 +76,22 @@ class Turn(db.Model):
     def get_by_id(cls, turn_id):
         """Get turn by ID"""
         return cls.query.get(turn_id)
+    
+    # In app/models/turn.py, add this method to the Turn class:
+    @classmethod
+    def get_next_turn_number(cls, leg_id: int) -> int:
+        """Get the next turn number for a leg"""
+        last_turn = cls.query.filter_by(leg_id=leg_id).order_by(cls.turn_number.desc()).first()
+        if last_turn:
+            return last_turn.turn_number + 1
+        return 1
+
+    # Also make sure you have this method (for getting the last turn):
+    @classmethod
+    def get_last_turn_for_leg(cls, leg_id: int):
+        """Get the last turn for a leg that's not complete (has < 3 darts)"""
+        return cls.query.filter_by(
+            leg_id=leg_id
+        ).filter(
+            cls.darts_thrown < 3
+        ).order_by(cls.turn_number.desc()).first()

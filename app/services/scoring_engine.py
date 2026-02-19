@@ -61,76 +61,147 @@ class ScoringEngine:
         dart_number: int
     ) -> Dict[str, Any]:
         """Process a single dart throw"""
+        from app.models import Turn, Throw, Leg
+        
+        print(f"DEBUG: Starting process_throw for leg {leg_id}, player {player_id}")
+        
         # Get or create current turn
         turn = Turn.get_last_turn_for_leg(leg_id)
         
-        if not turn or turn.darts_thrown >= 3 or turn.player_id != player_id:
-            # Start new turn
-            if turn and turn.darts_thrown >= 3:
-                turn_number = turn.turn_number + 1
-            else:
-                turn_number = 1
-            
-            # Get current remaining score from last turn or start at 501
-            if turn:
-                remaining_score = turn.remaining_score
-            else:
-                remaining_score = cls.STARTING_SCORE_501
-            
-            turn = Turn.create_for_leg(leg_id, player_id, turn_number, remaining_score)
+        print(f"DEBUG: Found turn: {turn}")
+        if turn:
+            print(f"DEBUG: Turn player_id: {turn.player_id}, darts_thrown: {turn.darts_thrown}")
         
-        # Calculate points for this throw
+        # Check if we need a new turn
+        if not turn or turn.darts_thrown >= 3 or turn.player_id != player_id:
+            print(f"DEBUG: Creating new turn (reason: {'no turn' if not turn else 'wrong player/darts'})")
+            
+            # Get next turn number
+            turn_number = Turn.get_next_turn_number(leg_id)
+            print(f"DEBUG: Next turn number: {turn_number}")
+            
+            # Get player's current score
+            player_current_score = 501  # Start with 501
+            
+            # Subtract all non-busted turns for this player
+            player_turns = Turn.query.filter_by(
+                leg_id=leg_id,
+                player_id=player_id,
+                is_bust=False
+            ).all()
+            
+            for player_turn in player_turns:
+                player_current_score -= player_turn.score
+            
+            print(f"DEBUG: Player {player_id} current score: {player_current_score}")
+            
+            # Create new turn - EXPLICITLY set all fields
+            turn = Turn(
+                leg_id=leg_id,
+                player_id=player_id,
+                turn_number=turn_number,
+                remaining_score=player_current_score,
+                score=0,
+                darts_thrown=0,  # EXPLICITLY set to 0
+                is_bust=False,
+                is_checkout=False
+            )
+            db.session.add(turn)
+            db.session.flush()  # Get the ID without committing
+            print(f"DEBUG: Created new turn with ID: {turn.id}")
+        
+        # Ensure darts_thrown is not None
+        if turn.darts_thrown is None:
+            print(f"DEBUG: WARNING: turn.darts_thrown was None, setting to 0")
+            turn.darts_thrown = 0
+        
+        print(f"DEBUG: Current darts_thrown: {turn.darts_thrown}")
+        
+        # Calculate points
         points = cls.calculate_points(segment, multiplier)
+        print(f"DEBUG: Points calculated: {points} ({multiplier}x{segment})")
         
         # Check for bust
-        is_bust = cls.is_bust(turn.remaining_score, points)
+        new_remaining = turn.remaining_score - points
+        is_bust = new_remaining < 2
         
-        # Check for checkout
-        is_checkout = False
-        if not is_bust:
-            is_checkout = cls.is_valid_checkout(turn.remaining_score, points, multiplier, segment)
+        print(f"DEBUG: Bust check: {turn.remaining_score} - {points} = {new_remaining}, is_bust: {is_bust}")
         
-        # Create the throw
-        throw = Throw.create_for_turn(turn.id, dart_number, segment, multiplier)
-        
-        # Update turn statistics
-        turn.darts_thrown += 1
+        # Create throw
+        throw = Throw(
+            turn_id=turn.id,
+            dart_number=dart_number,
+            segment=segment,
+            multiplier=multiplier,
+            points=points,
+            is_bust=is_bust,
+            is_checkout=False
+        )
         
         if is_bust:
-            # Bust - score doesn't count, reset to previous remaining score
+            print(f"DEBUG: BUST detected!")
             throw.is_bust = True
             turn.is_bust = True
-            # For bust, we don't update the score
-        elif is_checkout:
-            # Checkout - game won!
-            throw.is_checkout = True
-            turn.is_checkout = True
-            turn.score += points
-            turn.remaining_score = 0
-            
-            # Complete the leg
-            leg = Leg.get_by_id(leg_id)
-            leg.complete(player_id)
+            turn.score = 0  # Bust means 0 points for the turn
+            # Do NOT update remaining_score
         else:
-            # Normal throw
+            # Valid throw
             turn.score += points
-            turn.remaining_score -= points
+            turn.remaining_score = new_remaining
+            
+            # Check for checkout (must finish on double)
+            if new_remaining == 0:
+                if segment == 25:
+                    is_checkout = multiplier == 2  # Double bull
+                else:
+                    is_checkout = multiplier == 2  # Double
+                    
+                if is_checkout:
+                    print(f"DEBUG: CHECKOUT!")
+                    throw.is_checkout = True
+                    turn.is_checkout = True
         
-        # Update throw with bust/checkout flags
+        # Increment darts_thrown - ensure it's not None
+        if turn.darts_thrown is None:
+            turn.darts_thrown = 1
+        else:
+            turn.darts_thrown += 1
+        
+        print(f"DEBUG: Updated darts_thrown to: {turn.darts_thrown}")
+        
         db.session.add(throw)
+        db.session.add(turn)
         db.session.commit()
         
-        # Prepare response
-        response = {
-            'throw': throw.to_dict(),
-            'turn': turn.to_dict(),
-            'is_bust': is_bust,
-            'is_checkout': is_checkout,
-            'remaining_score': turn.remaining_score,
-            'game_completed': is_checkout
-        }
+        print(f"DEBUG: Throw processed successfully, turn ID: {turn.id}, throw ID: {throw.id}")
         
-        return response
+        # Return response
+        return {
+            'game_completed': False,
+            'is_bust': is_bust,
+            'is_checkout': throw.is_checkout,
+            'remaining_score': turn.remaining_score,
+            'throw': throw.to_dict(),
+            'turn': turn.to_dict()
+        }
+
+    @classmethod
+    def get_player_current_score(cls, leg_id: int, player_id: int) -> int:
+        """Get a player's current score in a leg"""
+        # Start with 501
+        total_score = 501
+        
+        # Subtract all non-busted turns for this player
+        turns = Turn.query.filter_by(
+            leg_id=leg_id,
+            player_id=player_id,
+            is_bust=False
+        ).all()
+        
+        for turn in turns:
+            total_score -= turn.score
+        
+        return total_score
     
     @classmethod
     def undo_last_throw(cls, leg_id: int) -> Optional[Dict[str, Any]]:

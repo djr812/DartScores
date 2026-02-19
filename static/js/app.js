@@ -6,6 +6,7 @@ class DartsGame {
         this.currentPlayerId = null;
         this.currentDartNumber = 1;
         this.currentMultiplier = 1;
+        this.currentTurnIsBust = false;
         this.players = [];
         this.offlineThrows = [];
         this.isOnline = true;
@@ -355,7 +356,8 @@ class DartsGame {
         // Update button states
         this.updateButtonStates();
     }
-        async recordThrow(segment, multiplier) {
+
+    async recordThrow(segment, multiplier) {
         console.log(`=== recordThrow ===`);
         this.logGameState('before throw');
         
@@ -394,7 +396,7 @@ class DartsGame {
             );
             
             console.log('Throw successful - FULL RESPONSE:', JSON.stringify(response, null, 2));
-        
+            
             // Check what's in the response
             console.log('Response analysis:');
             console.log('  Has turn object?', 'turn' in response);
@@ -404,31 +406,144 @@ class DartsGame {
             console.log('  Is checkout?', response.is_checkout);
             console.log('  Game completed?', response.game_completed);
             
-            // Update dart number for next throw
-            this.currentDartNumber++;
-            
-            // If we've thrown 3 darts, reset for next turn
-            if (this.currentDartNumber > 3) {
+            // ========== BUST HANDLING ==========
+            if (response.is_bust) {
+                console.log('BUST detected!');
+                this.showMessage('Bust! Score reverts. Next player.');
+                this.currentTurnIsBust = true; // Track bust state
+
+                // Bust means turn is complete immediately
                 this.currentDartNumber = 1;
-                this.showMessage('Turn complete. Tap Next Player.');
+                
+                // Update UI to show bust
+                this.updateUIForBust(response, segment, multiplier);
+                
+            } else if (response.game_completed) {
+                console.log('GAME COMPLETED! Checkout!');
+                this.showMessage(`Game won! Checkout: ${response.throw.points}`);
+                this.currentDartNumber = 1;
+                
+                // Update UI for checkout
+                this.updateUIAfterThrow(response, segment, multiplier);
+                
+            } else {
+                this.currentTurnIsBust = false; // Reset bust state
+                // Normal throw - update dart number
+                this.currentDartNumber++;
+                
+                // If we've thrown 3 darts, reset for next turn
+                if (this.currentDartNumber > 3) {
+                    this.currentDartNumber = 1;
+                    this.showMessage('Turn complete. Tap Next Player.');
+                }
+                
+                console.log(`Updated dart number to: ${this.currentDartNumber}`);
+                
+                // Update UI for normal throw
+                this.updateUIAfterThrow(response, segment, multiplier);
             }
             
-            console.log(`Updated dart number to: ${this.currentDartNumber}`);
-            
+            // Update button states after throw
+            this.updateButtonStates();
+
             // Refresh game state from server
             await this.loadGameState();
             
         } catch (error) {
             console.error('Throw failed:', error);
-            
-            // Don't simulate throw on API errors
             this.showError('Throw failed. Please check game state.');
-            
-            // Refresh game state to get correct IDs
             await this.loadGameState();
         }
+        }
+        
+        updateUIAfterThrow(response, segment, multiplier) {
+        console.log('Updating UI after throw...');
+        
+        // Update dart display
+        const dartThrows = document.getElementById('dart-throws');
+        if (dartThrows && response.throw) {
+            const throwObj = response.throw;
+            const dartIndex = throwObj.dart_number - 1;
+            
+            if (dartIndex >= 0 && dartIndex < 3) {
+                const dartElement = dartThrows.children[dartIndex];
+                const multiplierText = throwObj.multiplier === 1 ? '' : 
+                                    throwObj.multiplier === 2 ? 'D' : 'T';
+                dartElement.textContent = `${throwObj.dart_number}: ${multiplierText}${throwObj.segment} (${throwObj.points})`;
+            }
+        }
+        
+        // Update turn total
+        if (response.turn) {
+            document.getElementById('turn-total').textContent = `Turn: ${response.turn.score}`;
+        }
+        
+        // Update remaining score
+        if (response.remaining_score !== undefined) {
+            document.getElementById('remaining-score').textContent = response.remaining_score;
+        }
     }
-    
+
+    updateUIForBust(response, segment, multiplier) {
+        console.log('Updating UI for bust...');
+        
+        // Update dart display with BUST indicator
+        const dartThrows = document.getElementById('dart-throws');
+        if (dartThrows && response.throw) {
+            const throwObj = response.throw;
+            const dartIndex = throwObj.dart_number - 1;
+            
+            if (dartIndex >= 0 && dartIndex < 3) {
+                const dartElement = dartThrows.children[dartIndex];
+                const multiplierText = throwObj.multiplier === 1 ? '' : 
+                                    throwObj.multiplier === 2 ? 'D' : 'T';
+                
+                // Add BUST! to the display
+                dartElement.textContent = `${throwObj.dart_number}: ${multiplierText}${throwObj.segment} (${throwObj.points}) BUST!`;
+                dartElement.style.color = '#e94560';
+                dartElement.style.fontWeight = 'bold';
+            }
+        }
+        
+        // Update turn total to show BUST
+        const turnTotalElement = document.getElementById('turn-total');
+        turnTotalElement.textContent = 'Turn: BUST!';
+        turnTotalElement.style.color = '#e94560';
+        turnTotalElement.style.fontWeight = 'bold';
+        
+        // Update remaining score (should stay the same after bust)
+        if (response.remaining_score !== undefined) {
+            document.getElementById('remaining-score').textContent = response.remaining_score;
+        }
+        
+        // Clear the bust display after 2 seconds
+        setTimeout(() => {
+            this.clearBustDisplay();
+        }, 2000);
+    }
+
+    clearBustDisplay() {
+        console.log('Clearing bust display...');
+        
+        // Reset dart display colors
+        const dartThrows = document.getElementById('dart-throws');
+        if (dartThrows) {
+            for (let i = 0; i < 3; i++) {
+                const dartElement = dartThrows.children[i];
+                dartElement.style.color = '';
+                dartElement.style.fontWeight = '';
+            }
+        }
+        
+        // Reset turn total display
+        const turnTotalElement = document.getElementById('turn-total');
+        if (turnTotalElement) {
+            turnTotalElement.textContent = 'Turn: 0';
+            turnTotalElement.style.color = '';
+            turnTotalElement.style.fontWeight = '';
+        }
+    }
+
     calculatePoints(segment, multiplier) {
         if (segment === 0) return 0;
         if (segment === 25) return multiplier === 2 ? 50 : 25;
@@ -470,15 +585,37 @@ class DartsGame {
             this.currentPlayerId = response.next_player_id;
             this.currentDartNumber = 1;
             
-            // Clear dart display
+            // ========== RESET BUST STATE ==========
+            this.currentTurnIsBust = false; // Reset bust tracking
+            
+            // Clear dart display and reset styles
             const dartThrows = document.getElementById('dart-throws');
-            for (let i = 0; i < 3; i++) {
-                dartThrows.children[i].textContent = `${i + 1}: `;
+            if (dartThrows) {
+                for (let i = 0; i < 3; i++) {
+                    const dartElement = dartThrows.children[i];
+                    dartElement.textContent = `${i + 1}: `;
+                    dartElement.style.color = ''; // Reset color
+                    dartElement.style.fontWeight = ''; // Reset font weight
+                }
             }
-            document.getElementById('turn-total').textContent = 'Turn: 0';
+            
+            // Reset turn total display
+            const turnTotalElement = document.getElementById('turn-total');
+            if (turnTotalElement) {
+                turnTotalElement.textContent = 'Turn: 0';
+                turnTotalElement.style.color = ''; // Reset color
+                turnTotalElement.style.fontWeight = ''; // Reset font weight
+            }
+            
+            // Update button states (re-enable throw buttons)
+            this.updateButtonStates();
             
             // Update display
             await this.loadGameState();
+            
+            // Show message
+            this.showMessage(`Now playing: Player ${this.currentPlayerId}`);
+            
         } catch (error) {
             console.error('Failed to switch player:', error);
             this.showError('Failed to switch player.');
@@ -600,25 +737,30 @@ class DartsGame {
     
     updateButtonStates() {
         const buttons = document.querySelectorAll('.segment-btn, .special-btn');
+        
         buttons.forEach(btn => {
-            if (this.currentDartNumber > 3) {
+            if (this.currentDartNumber > 3 || this.currentTurnIsBust) {
                 btn.disabled = true;
                 btn.style.opacity = '0.5';
+                btn.style.cursor = 'not-allowed';
             } else {
                 btn.disabled = false;
                 btn.style.opacity = '1';
+                btn.style.cursor = 'pointer';
             }
         });
         
         // Update next player button
         const nextPlayerBtn = document.getElementById('next-player-btn');
         if (nextPlayerBtn) {
-            if (this.currentDartNumber > 3) {
-                nextPlayerBtn.style.backgroundColor = '#e94560';
-                nextPlayerBtn.textContent = 'Next Player (Ready)';
-            } else {
-                nextPlayerBtn.style.backgroundColor = '#4ecca3';
-                nextPlayerBtn.textContent = 'Next Player';
+            if (this.currentDartNumber > 3 || this.currentTurnIsBust) {
+            nextPlayerBtn.style.backgroundColor = '#e94560';
+            nextPlayerBtn.textContent = this.currentTurnIsBust ? 'Next Player (Bust!)' : 'Next Player (Ready)';
+            nextPlayerBtn.disabled = false;
+        } else {
+            nextPlayerBtn.style.backgroundColor = '#4ecca3';
+            nextPlayerBtn.textContent = 'Next Player';
+            nextPlayerBtn.disabled = true;
             }
         }
     }
