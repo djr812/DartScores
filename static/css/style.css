@@ -534,6 +534,26 @@ body {
         padding: 12px 6px;
         font-size: 0.9rem;
     }
+    .turn-status {
+        text-align: center;
+        padding: 8px;
+        margin: 10px 0;
+        background: #0f3460;
+        border-radius: 8px;
+        font-weight: bold;
+    }
+
+    #darts-remaining {
+        color: #4ecca3;
+    }
+
+    .turn-status.complete {
+        background: #e94560;
+    }
+
+    .turn-status.complete #darts-remaining {
+        color: white;
+    }
 }
 
 /* Touch feedback */
