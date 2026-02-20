@@ -10,6 +10,8 @@ class DartsGame {
         this.players = [];
         this.offlineThrows = [];
         this.isOnline = true;
+        this.isProcessingThrow = false;
+        this.lastThrowTime = 0;
         
         this.init();
     }
@@ -411,6 +413,17 @@ class DartsGame {
             this.currentDartNumber = 1;
         }
         
+        if (this.isProcessingThrow) {
+            console.log('Already processing a throw, skipping...');
+            return;
+        }
+
+        const now = Date.now();
+        if (now - this.lastThrowTime < 500) {  // 500ms between throws
+            console.log('Too soon since last throw, skipping...');
+            return;
+        }
+
         console.log(`Attempting dart ${this.currentDartNumber}, segment ${segment}, multiplier ${multiplier}`);
         
         if (!this.currentMatchId || !this.currentLegId || !this.currentPlayerId) {
@@ -426,6 +439,8 @@ class DartsGame {
         };
         
         console.log('Throw data:', throwData);
+        this.isProcessingThrow = true;
+        this.lastThrowTime = now;
         
         try {
             const response = await this.apiRequest(
@@ -493,9 +508,10 @@ class DartsGame {
             console.error('Throw failed:', error);
             this.showError('Throw failed. Please check game state.');
             await this.loadGameState();
+        } finally {
+            this.isProcessingThrow = false;
         }
-        }
-        
+    }   
         updateUIAfterThrow(response, segment, multiplier) {
         console.log('Updating UI after throw...');
         

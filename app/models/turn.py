@@ -68,9 +68,13 @@ class Turn(db.Model):
         return turn
     
     @classmethod
-    def get_last_turn_for_leg(cls, leg_id):
-        """Get the last turn for a leg"""
-        return cls.query.filter_by(leg_id=leg_id).order_by(cls.turn_number.desc()).first()
+    def get_last_turn_for_leg(cls, leg_id: int):
+        """Get the last turn for a leg that's not complete (has < 3 darts)"""
+        return cls.query.filter_by(
+            leg_id=leg_id
+        ).filter(
+            cls.darts_thrown < 3
+        ).order_by(cls.turn_number.desc()).first()
     
     @classmethod
     def get_by_id(cls, turn_id):
